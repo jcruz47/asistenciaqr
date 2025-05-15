@@ -546,20 +546,20 @@ def vista_alumno():
 def registrar_asistencia():
     st.title("Registro de Asistencia")
 
-    # Obtener parámetros de la URL
+    # Obtener parámetros de la URL correctamente
     try:
-        params = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
+        params = st.experimental_get_query_params()
     except:
         params = {}
 
-    # 🔍 Mostrar parámetros recibidos
-    st.write("🛠️ DEBUG - Parámetros recibidos:", params)
-
-    clase_id = params.get("clase_id", [None])[0]
+    clase_id_str = params.get("clase_id", [None])[0]
     token = params.get("token", [None])[0]
 
-    st.write("📌 clase_id:", clase_id)
-    st.write("📌 token:", token)
+    try:
+        clase_id = int(clase_id_str)
+    except (ValueError, TypeError):
+        st.error("⚠️ El ID de la clase es inválido.")
+        return
 
     # Verificar sesión activa y tipo de usuario
     if 'user' not in st.session_state:
@@ -584,9 +584,6 @@ def registrar_asistencia():
         )
         clase = c.fetchone()
 
-        # 🔍 Mostrar resultado de la consulta
-        st.write("🔎 Resultado de búsqueda de clase:", clase)
-
         if not clase:
             st.error("""
             ❌ Clase no encontrada. Verifica:
@@ -596,7 +593,7 @@ def registrar_asistencia():
             """)
             return
 
-        if not clase[3]:  # Si la clase está inactiva
+        if not clase[3]:  # Clase inactiva
             st.warning("⚠️ Esta clase está actualmente desactivada")
             return
 
@@ -625,11 +622,12 @@ def registrar_asistencia():
         st.error(f"🐘 Error de base de datos: {e}")
     finally:
         conn.close()
+
     
 def main():
     # Obtener parámetros de la URL (compatible con todas versiones)
     try:
-        params = st.query_params if hasattr(st, 'query_params') else st.experimental_get_query_params()
+        params = st.experimental_get_query_params()
     except:
         params = {}
     
