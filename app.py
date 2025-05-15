@@ -548,7 +548,7 @@ def registrar_asistencia():
 
     # Obtener parámetros de la URL correctamente
     try:
-        params = st.experimental_get_query_params()
+        params = st.query_params
     except:
         params = {}
 
@@ -627,7 +627,7 @@ def registrar_asistencia():
 def main():
     # Obtener parámetros de la URL (compatible con todas versiones)
     try:
-        params = st.experimental_get_query_params()
+        params = st.query_params
     except:
         params = {}
     
