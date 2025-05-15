@@ -6,6 +6,7 @@ from PIL import Image
 from io import BytesIO
 import time
 from urllib.parse import urlparse
+from datetime import timedelta
 
 # Configuración inicial
 st.set_page_config(page_title="Sistema de Asistencia con QR", layout="wide")
@@ -502,8 +503,8 @@ def vista_profesor():
                             conn.close()
                             st.rerun()
         
-                # Mostrar alumnos inscritos y sus asistencias (DENTRO del expander de cada clase)
-                st.subheader(f"Alumnos inscritos en {clase[1]}")
+                # Sección mejorada de alumnos y asistencias
+                st.subheader(f"📊 Asistencias para {clase[1]}")
                 
                 conn = get_db_connection()
                 c = conn.cursor()
@@ -515,15 +516,68 @@ def vista_profesor():
                     WHERE ac.clase_id = %s
                     GROUP BY u.id, u.nombre
                     ORDER BY u.nombre
-                    """, (clase[0], clase[0]))
+                """, (clase[0], clase[0]))
                 alumnos_asistencias = c.fetchall()
                 conn.close()
 
                 if alumnos_asistencias:
                     for alumno_id, alumno_nombre, total in alumnos_asistencias:
-                        st.write(f"👤 {alumno_nombre}: {total} asistencia(s)")
+                        with st.expander(f"👤 {alumno_nombre} - {total} asistencia(s)"):
+                            # Mostrar fechas específicas de asistencia
+                            conn = get_db_connection()
+                            c = conn.cursor()
+                            c.execute("""
+                                SELECT fecha FROM asistencias
+                                WHERE estudiante_id = %s AND clase_id = %s
+                                ORDER BY fecha DESC
+                            """, (alumno_id, clase[0]))
+                            fechas = c.fetchall()
+                            conn.close()
+
+                            if fechas:
+                                st.write("**Fechas de asistencia:**")
+                                for fecha in fechas:
+                                    st.write(f"- {fecha[0].strftime('%Y-%m-%d %H:%M:%S')}")
+                                
+                                # Opción para filtrar por fecha
+                                st.subheader("Filtrar por fecha")
+                                col_f1, col_f2 = st.columns(2)
+                                with col_f1:
+                                    fecha_inicio = st.date_input("Fecha inicio", value=None, key=f"ini_{alumno_id}_{clase[0]}")
+                                with col_f2:
+                                    fecha_fin = st.date_input("Fecha fin", value=None, key=f"fin_{alumno_id}_{clase[0]}")
+
+                                if fecha_inicio or fecha_fin:
+                                    conn = get_db_connection()
+                                    c = conn.cursor()
+                                    query = """
+                                        SELECT fecha FROM asistencias
+                                        WHERE estudiante_id = %s AND clase_id = %s
+                                    """
+                                    params = [alumno_id, clase[0]]
+                                    
+                                    if fecha_inicio:
+                                        query += " AND fecha >= %s"
+                                        params.append(fecha_inicio)
+                                    if fecha_fin:
+                                        query += " AND fecha <= %s"
+                                        params.append(fecha_fin + timedelta(days=1))  # Para incluir todo el día
+                                    
+                                    query += " ORDER BY fecha DESC"
+                                    c.execute(query, tuple(params))
+                                    fechas_filtradas = c.fetchall()
+                                    conn.close()
+
+                                    st.write("**Asistencias filtradas:**")
+                                    if fechas_filtradas:
+                                        for fecha in fechas_filtradas:
+                                            st.write(f"- {fecha[0].strftime('%Y-%m-%d %H:%M:%S')}")
+                                    else:
+                                        st.info("No hay asistencias en el rango de fechas seleccionado")
+                            else:
+                                st.info("No hay registros de asistencia para este alumno")
                 else:
-                    st.info("No hay alumnos inscritos en esta clase.")
+                    st.info("No hay alumnos inscritos en esta clase")
     else:
         st.info("No tienes clases asignadas")
 
@@ -583,9 +637,6 @@ def registrar_asistencia():
         clase_id_str = clase_id_str[0]
     if isinstance(token, list):
         token = token[0]
-
-    # Mostrar valores para depuración
-    st.write(f"Debug - clase_id: {clase_id_str}, token: {token}")
 
     # Validaciones básicas
     if not clase_id_str or not token:
