@@ -1,85 +1,89 @@
 import streamlit as st
-import sqlite3
+import psycopg2
 import os
 import qrcode
 from PIL import Image
 from io import BytesIO
 import time
+from urllib.parse import urlparse
 
 # Configuración inicial
 st.set_page_config(page_title="Sistema de Asistencia con QR", layout="wide")
-
-# Crear directorios si no existen
-os.makedirs("data", exist_ok=True)
 os.makedirs("qr_codes", exist_ok=True)
 
-# Inicializar base de datos
+# ==============================================
+# CONEXIÓN A POSTGRESQL (PRODUCCIÓN)
+# ==============================================
+def get_db_connection():
+    db_url = "postgresql://admin_asistencia:Bd5tYJfzE1pNoASHMyUStull4tJpyYLc@dpg-d0j29p2li9vc73bevkpg-a.oregon-postgres.render.com/asistencia_qr"
+    
+    parsed_url = urlparse(db_url)
+    conn = psycopg2.connect(
+        database=parsed_url.path[1:],
+        user=parsed_url.username,
+        password=parsed_url.password,
+        host=parsed_url.hostname,
+        port=parsed_url.port,
+        sslmode='require'
+    )
+    return conn
+
+# ==============================================
+# INICIALIZACIÓN DE LA BASE DE DATOS
+# ==============================================
 def init_db():
-    conn = sqlite3.connect('data/database.db')
+    conn = get_db_connection()
     c = conn.cursor()
     
-    # Tabla de usuarios
-    c.execute('''CREATE TABLE IF NOT EXISTS usuarios
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 username TEXT UNIQUE,
-                 password TEXT,
-                 nombre TEXT,
-                 tipo TEXT CHECK(tipo IN ('admin', 'profesor', 'alumno')),
-                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-    
-    # Tabla de clases
-    c.execute('''CREATE TABLE IF NOT EXISTS clases
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 nombre TEXT UNIQUE,
-                 profesor_id INTEGER,
-                 qr_token TEXT,
-                 activa BOOLEAN DEFAULT 1,
-                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                 FOREIGN KEY (profesor_id) REFERENCES usuarios(id))''')
-    
-    # Tabla de asistencias
-    c.execute('''CREATE TABLE IF NOT EXISTS asistencias
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 estudiante_id INTEGER,
-                 clase_id INTEGER,
-                 fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                 FOREIGN KEY (estudiante_id) REFERENCES usuarios(id),
-                 FOREIGN KEY (clase_id) REFERENCES clases(id))''')
-    
-    # Tabla alumnos_clases
-    c.execute('''CREATE TABLE IF NOT EXISTS alumnos_clases
-                 (alumno_id INTEGER,
-                 clase_id INTEGER,
-                 PRIMARY KEY (alumno_id, clase_id),
-                 FOREIGN KEY (alumno_id) REFERENCES usuarios(id),
-                 FOREIGN KEY (clase_id) REFERENCES clases(id))''')
-    
-    # Crear usuario admin si no existe
-    c.execute("SELECT 1 FROM usuarios WHERE username='admin'")
-    if not c.fetchone():
-        c.execute("INSERT INTO usuarios (username, password, nombre, tipo) VALUES (?, ?, ?, ?)",
-                  ('admin', 'admin123', 'Administrador', 'admin'))
-    
-    conn.commit()
-    conn.close()
+    try:
+        c.execute('''CREATE TABLE IF NOT EXISTS usuarios
+                    (id SERIAL PRIMARY KEY,
+                    username TEXT UNIQUE,
+                    password TEXT,
+                    nombre TEXT,
+                    tipo TEXT CHECK(tipo IN ('admin', 'profesor', 'alumno')),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS clases
+                    (id SERIAL PRIMARY KEY,
+                    nombre TEXT UNIQUE,
+                    profesor_id INTEGER REFERENCES usuarios(id),
+                    qr_token TEXT,
+                    activa BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS asistencias
+                    (id SERIAL PRIMARY KEY,
+                    estudiante_id INTEGER REFERENCES usuarios(id),
+                    clase_id INTEGER REFERENCES clases(id),
+                    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+        
+        c.execute('''CREATE TABLE IF NOT EXISTS alumnos_clases
+                    (alumno_id INTEGER REFERENCES usuarios(id),
+                    clase_id INTEGER REFERENCES clases(id),
+                    PRIMARY KEY (alumno_id, clase_id))''')
+        
+        c.execute("SELECT 1 FROM usuarios WHERE username='admin'")
+        if not c.fetchone():
+            c.execute("INSERT INTO usuarios (username, password, nombre, tipo) VALUES (%s, %s, %s, %s)",
+                     ('admin', 'admin123', 'Administrador', 'admin'))
+        
+        conn.commit()
+    except Exception as e:
+        st.error(f"Error inicializando la base de datos: {str(e)}")
+    finally:
+        conn.close()
 
 init_db()
 
-# Funciones de ayuda
-def get_db_connection():
-    return sqlite3.connect('data/database.db')
-
+# ==============================================
+# FUNCIONES AUXILIARES
+# ==============================================
 def generar_qr(url, filename=None):
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=10,
-        border=4,
-    )
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
     qr.add_data(url)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
-    
     if filename:
         img.save(f"qr_codes/{filename}")
     return img
@@ -90,9 +94,11 @@ def img_to_bytes(img):
     return buffered.getvalue()
 
 def generar_url_qr(clase_id, qr_token):
-    return f"/?clase_id={clase_id}&token={qr_token}"
+    return f"https://asistenciaqr.onrender.com/?clase_id={clase_id}&token={qr_token}"
 
-# Autenticación
+# ==============================================
+# AUTENTICACIÓN
+# ==============================================
 def login():
     st.sidebar.title("Inicio de Sesión")
     username = st.sidebar.text_input("Usuario")
@@ -100,29 +106,35 @@ def login():
     
     if st.sidebar.button("Ingresar"):
         conn = get_db_connection()
-        user = conn.execute(
-            "SELECT id, username, nombre, tipo FROM usuarios WHERE username = ? AND password = ?",
-            (username, password)
-        ).fetchone()
-        conn.close()
-        
-        if user:
-            st.session_state.user = {
-                'id': user[0],
-                'username': user[1],
-                'nombre': user[2],
-                'tipo': user[3]
-            }
-            st.rerun()
-        else:
-            st.sidebar.error("Usuario o contraseña incorrectos")
+        try:
+            c = conn.cursor()
+            c.execute(
+                "SELECT id, username, nombre, tipo FROM usuarios WHERE username = %s AND password = %s",
+                (username, password)
+            )
+            user = c.fetchone()
+            
+            if user:
+                st.session_state.user = {
+                    'id': user[0],
+                    'username': user[1],
+                    'nombre': user[2],
+                    'tipo': user[3]
+                }
+                st.rerun()
+            else:
+                st.sidebar.error("Credenciales incorrectas")
+        finally:
+            conn.close()
 
 def logout():
     if 'user' in st.session_state:
         del st.session_state.user
     st.rerun()
 
-# Vistas
+# ==============================================
+# VISTA ADMINISTRADOR
+# ==============================================
 def vista_admin():
     st.title("Panel de Administración")
     
@@ -131,13 +143,14 @@ def vista_admin():
     with tab1:
         st.header("Gestión de Clases")
         
-        # Crear nueva clase
         with st.expander("Crear Nueva Clase", expanded=False):
             with st.form("nueva_clase"):
                 nombre = st.text_input("Nombre de la clase (debe ser único)")
-                profesores = get_db_connection().execute(
-                    "SELECT id, nombre FROM usuarios WHERE tipo = 'profesor'"
-                ).fetchall()
+                conn = get_db_connection()
+                c = conn.cursor()
+                c.execute("SELECT id, nombre FROM usuarios WHERE tipo = 'profesor'")
+                profesores = c.fetchall()
+                conn.close()
                 
                 if profesores:
                     profesor_id = st.selectbox(
@@ -150,37 +163,37 @@ def vista_admin():
                         qr_token = os.urandom(16).hex()
                         conn = get_db_connection()
                         try:
-                            conn.execute(
-                                "INSERT INTO clases (nombre, profesor_id, qr_token) VALUES (?, ?, ?)",
+                            c = conn.cursor()
+                            c.execute(
+                                "INSERT INTO clases (nombre, profesor_id, qr_token) VALUES (%s, %s, %s) RETURNING id",
                                 (nombre, profesor_id, qr_token)
                             )
-                            clase_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                            clase_id = c.fetchone()[0]
                             conn.commit()
                             
-                            # Generar QR
                             url = generar_url_qr(clase_id, qr_token)
                             qr_img = generar_qr(url, f"clase_{clase_id}.png")
                             
                             st.success("Clase creada exitosamente!")
-                            img_bytes = img_to_bytes(qr_img)
-                            st.image(img_bytes, caption=f"QR para {nombre}", width=300)
-                            st.code(url, language="text")
-                        except sqlite3.IntegrityError:
+                            st.image(img_to_bytes(qr_img), caption=f"QR para {nombre}", width=300)
+                            st.code(url)
+                        except psycopg2.IntegrityError:
                             st.error("Ya existe una clase con ese nombre")
                         finally:
                             conn.close()
                 else:
-                    st.warning("No hay profesores registrados. Registra al menos un profesor primero.")
+                    st.warning("No hay profesores registrados")
         
-        # Gestión de clases existentes
         st.subheader("Clases Existentes")
         conn = get_db_connection()
-        clases = conn.execute(
+        c = conn.cursor()
+        c.execute(
             """SELECT c.id, c.nombre, u.nombre as profesor, c.activa, c.created_at 
             FROM clases c 
             JOIN usuarios u ON c.profesor_id = u.id 
             ORDER BY c.activa DESC, c.created_at DESC"""
-        ).fetchall()
+        )
+        clases = c.fetchall()
         conn.close()
         
         if clases:
@@ -189,44 +202,35 @@ def vista_admin():
                     col1, col2 = st.columns([3, 1])
                     
                     with col1:
-                        # Obtener token QR
                         conn = get_db_connection()
-                        qr_token = conn.execute(
-                            "SELECT qr_token FROM clases WHERE id = ?",
-                            (clase[0],)
-                        ).fetchone()[0]
+                        c = conn.cursor()
+                        c.execute("SELECT qr_token FROM clases WHERE id = %s", (clase[0],))
+                        qr_token = c.fetchone()[0]
                         conn.close()
                         
                         url = generar_url_qr(clase[0], qr_token)
-                        qr_img = generar_qr(url)
-                        img_bytes = img_to_bytes(qr_img)
+                        st.image(img_to_bytes(generar_qr(url)), caption=f"QR para {clase[1]}", width=250)
+                        st.code(url)
                         
-                        st.image(img_bytes, caption=f"QR para {clase[1]}", width=250)
-                        st.code(url, language="text")
-                        
-                        # Estadísticas
                         conn = get_db_connection()
-                        num_alumnos = conn.execute(
-                            "SELECT COUNT(*) FROM alumnos_clases WHERE clase_id = ?",
-                            (clase[0],)
-                        ).fetchone()[0]
-                        num_asistencias = conn.execute(
-                            "SELECT COUNT(*) FROM asistencias WHERE clase_id = ?",
-                            (clase[0],)
-                        ).fetchone()[0]
+                        c = conn.cursor()
+                        c.execute("SELECT COUNT(*) FROM alumnos_clases WHERE clase_id = %s", (clase[0],))
+                        num_alumnos = c.fetchone()[0]
+                        c.execute("SELECT COUNT(*) FROM asistencias WHERE clase_id = %s", (clase[0],))
+                        num_asistencias = c.fetchone()[0]
                         conn.close()
                         
                         st.write(f"Alumnos inscritos: {num_alumnos}")
                         st.write(f"Asistencias registradas: {num_asistencias}")
                     
                     with col2:
-                        # Opciones de gestión
                         with st.form(f"opciones_clase_{clase[0]}"):
                             nueva_activa = not clase[3]
                             if st.form_submit_button("Activar" if nueva_activa else "Desactivar"):
                                 conn = get_db_connection()
-                                conn.execute(
-                                    "UPDATE clases SET activa = ? WHERE id = ?",
+                                c = conn.cursor()
+                                c.execute(
+                                    "UPDATE clases SET activa = %s WHERE id = %s",
                                     (nueva_activa, clase[0])
                                 )
                                 conn.commit()
@@ -236,20 +240,20 @@ def vista_admin():
                             if st.form_submit_button("Regenerar QR"):
                                 nuevo_token = os.urandom(16).hex()
                                 conn = get_db_connection()
-                                conn.execute(
-                                    "UPDATE clases SET qr_token = ? WHERE id = ?",
+                                c = conn.cursor()
+                                c.execute(
+                                    "UPDATE clases SET qr_token = %s WHERE id = %s",
                                     (nuevo_token, clase[0])
                                 )
                                 conn.commit()
                                 conn.close()
                                 st.rerun()
         else:
-            st.info("No hay clases registradas aún")
+            st.info("No hay clases registradas")
 
     with tab2:
         st.header("Gestión de Profesores")
         
-        # Registrar nuevo profesor
         with st.expander("Registrar Nuevo Profesor", expanded=False):
             with st.form("nuevo_profesor"):
                 username = st.text_input("Usuario (único)")
@@ -259,23 +263,23 @@ def vista_admin():
                 if st.form_submit_button("Registrar Profesor"):
                     conn = get_db_connection()
                     try:
-                        conn.execute(
-                            "INSERT INTO usuarios (username, password, nombre, tipo) VALUES (?, ?, ?, ?)",
+                        c = conn.cursor()
+                        c.execute(
+                            "INSERT INTO usuarios (username, password, nombre, tipo) VALUES (%s, %s, %s, %s)",
                             (username, password, nombre, 'profesor')
                         )
                         conn.commit()
                         st.success("Profesor registrado exitosamente!")
-                    except sqlite3.IntegrityError:
+                    except psycopg2.IntegrityError:
                         st.error("El nombre de usuario ya existe")
                     finally:
                         conn.close()
         
-        # Listado y gestión de profesores
         st.subheader("Listado de Profesores")
         conn = get_db_connection()
-        profesores = conn.execute(
-            "SELECT id, username, nombre, created_at FROM usuarios WHERE tipo = 'profesor' ORDER BY nombre"
-        ).fetchall()
+        c = conn.cursor()
+        c.execute("SELECT id, username, nombre, created_at FROM usuarios WHERE tipo = 'profesor' ORDER BY nombre")
+        profesores = c.fetchall()
         conn.close()
         
         if profesores:
@@ -286,12 +290,10 @@ def vista_admin():
                     with col1:
                         st.write(f"**Registrado el:** {profesor[3]}")
                         
-                        # Obtener clases del profesor
                         conn = get_db_connection()
-                        clases = conn.execute(
-                            "SELECT id, nombre FROM clases WHERE profesor_id = ?",
-                            (profesor[0],)
-                        ).fetchall()
+                        c = conn.cursor()
+                        c.execute("SELECT id, nombre FROM clases WHERE profesor_id = %s", (profesor[0],))
+                        clases = c.fetchall()
                         conn.close()
                         
                         if clases:
@@ -304,18 +306,13 @@ def vista_admin():
                     with col2:
                         with st.form(f"eliminar_profesor_{profesor[0]}"):
                             if st.form_submit_button("Eliminar Profesor"):
-                                # Verificar si tiene clases asignadas
                                 conn = get_db_connection()
-                                tiene_clases = conn.execute(
-                                    "SELECT 1 FROM clases WHERE profesor_id = ?",
-                                    (profesor[0],)
-                                ).fetchone()
+                                c = conn.cursor()
+                                c.execute("SELECT 1 FROM clases WHERE profesor_id = %s", (profesor[0],))
+                                tiene_clases = c.fetchone()
                                 
                                 if not tiene_clases:
-                                    conn.execute(
-                                        "DELETE FROM usuarios WHERE id = ?",
-                                        (profesor[0],)
-                                    )
+                                    c.execute("DELETE FROM usuarios WHERE id = %s", (profesor[0],))
                                     conn.commit()
                                     st.success("Profesor eliminado correctamente")
                                     st.rerun()
@@ -328,7 +325,6 @@ def vista_admin():
     with tab3:
         st.header("Gestión de Alumnos")
         
-        # Registrar nuevo alumno
         with st.expander("Registrar Nuevo Alumno", expanded=False):
             with st.form("nuevo_alumno"):
                 username = st.text_input("Usuario (único)")
@@ -338,28 +334,26 @@ def vista_admin():
                 if st.form_submit_button("Registrar Alumno"):
                     conn = get_db_connection()
                     try:
-                        conn.execute(
-                            "INSERT INTO usuarios (username, password, nombre, tipo) VALUES (?, ?, ?, ?)",
+                        c = conn.cursor()
+                        c.execute(
+                            "INSERT INTO usuarios (username, password, nombre, tipo) VALUES (%s, %s, %s, %s)",
                             (username, password, nombre, 'alumno')
                         )
                         conn.commit()
                         st.success("Alumno registrado exitosamente!")
-                    except sqlite3.IntegrityError:
+                    except psycopg2.IntegrityError:
                         st.error("El nombre de usuario ya existe")
                     finally:
                         conn.close()
         
-        # Inscribir alumno a clase
         with st.expander("Inscribir Alumno a Clase", expanded=False):
             with st.form("inscribir_alumno"):
                 conn = get_db_connection()
-                alumnos = conn.execute(
-                    "SELECT id, nombre FROM usuarios WHERE tipo = 'alumno' ORDER BY nombre"
-                ).fetchall()
-                
-                clases = conn.execute(
-                    "SELECT id, nombre FROM clases ORDER BY nombre"
-                ).fetchall()
+                c = conn.cursor()
+                c.execute("SELECT id, nombre FROM usuarios WHERE tipo = 'alumno' ORDER BY nombre")
+                alumnos = c.fetchall()
+                c.execute("SELECT id, nombre FROM clases ORDER BY nombre")
+                clases = c.fetchall()
                 conn.close()
                 
                 if alumnos and clases:
@@ -378,25 +372,25 @@ def vista_admin():
                     if st.form_submit_button("Inscribir Alumno"):
                         conn = get_db_connection()
                         try:
-                            conn.execute(
-                                "INSERT INTO alumnos_clases (alumno_id, clase_id) VALUES (?, ?)",
+                            c = conn.cursor()
+                            c.execute(
+                                "INSERT INTO alumnos_clases (alumno_id, clase_id) VALUES (%s, %s)",
                                 (alumno_id, clase_id)
                             )
                             conn.commit()
                             st.success("Alumno inscrito exitosamente!")
-                        except sqlite3.IntegrityError:
+                        except psycopg2.IntegrityError:
                             st.error("Este alumno ya está inscrito en esta clase")
                         finally:
                             conn.close()
                 else:
                     st.warning("Necesitas tener al menos un alumno y una clase creada")
         
-        # Listado y gestión de alumnos
         st.subheader("Listado de Alumnos")
         conn = get_db_connection()
-        alumnos = conn.execute(
-            "SELECT id, username, nombre, created_at FROM usuarios WHERE tipo = 'alumno' ORDER BY nombre"
-        ).fetchall()
+        c = conn.cursor()
+        c.execute("SELECT id, username, nombre, created_at FROM usuarios WHERE tipo = 'alumno' ORDER BY nombre")
+        alumnos = c.fetchall()
         conn.close()
         
         if alumnos:
@@ -407,15 +401,16 @@ def vista_admin():
                     with col1:
                         st.write(f"**Registrado el:** {alumno[3]}")
                         
-                        # Obtener clases del alumno
                         conn = get_db_connection()
-                        clases = conn.execute(
+                        c = conn.cursor()
+                        c.execute(
                             """SELECT c.id, c.nombre 
                             FROM alumnos_clases ac 
                             JOIN clases c ON ac.clase_id = c.id 
-                            WHERE ac.alumno_id = ?""",
+                            WHERE ac.alumno_id = %s""",
                             (alumno[0],)
-                        ).fetchall()
+                        )
+                        clases = c.fetchall()
                         conn.close()
                         
                         if clases:
@@ -429,18 +424,10 @@ def vista_admin():
                         with st.form(f"eliminar_alumno_{alumno[0]}"):
                             if st.form_submit_button("Eliminar Alumno"):
                                 conn = get_db_connection()
-                                conn.execute(
-                                    "DELETE FROM usuarios WHERE id = ?",
-                                    (alumno[0],)
-                                )
-                                conn.execute(
-                                    "DELETE FROM alumnos_clases WHERE alumno_id = ?",
-                                    (alumno[0],)
-                                )
-                                conn.execute(
-                                    "DELETE FROM asistencias WHERE estudiante_id = ?",
-                                    (alumno[0],)
-                                )
+                                c = conn.cursor()
+                                c.execute("DELETE FROM usuarios WHERE id = %s", (alumno[0],))
+                                c.execute("DELETE FROM alumnos_clases WHERE alumno_id = %s", (alumno[0],))
+                                c.execute("DELETE FROM asistencias WHERE estudiante_id = %s", (alumno[0],))
                                 conn.commit()
                                 conn.close()
                                 st.success("Alumno eliminado correctamente")
@@ -448,18 +435,22 @@ def vista_admin():
         else:
             st.info("No hay alumnos registrados")
 
+# ==============================================
+# VISTA PROFESOR
+# ==============================================
 def vista_profesor():
     st.title("Panel del Profesor")
     
-    # Mostrar clases del profesor
     conn = get_db_connection()
-    clases = conn.execute(
+    c = conn.cursor()
+    c.execute(
         """SELECT c.id, c.nombre, c.activa, c.created_at 
         FROM clases c 
-        WHERE c.profesor_id = ? 
+        WHERE c.profesor_id = %s 
         ORDER BY c.activa DESC, c.created_at DESC""",
         (st.session_state.user['id'],)
-    ).fetchall()
+    )
+    clases = c.fetchall()
     conn.close()
     
     if clases:
@@ -468,44 +459,35 @@ def vista_profesor():
                 col1, col2 = st.columns([3, 1])
                 
                 with col1:
-                    # Obtener token QR
                     conn = get_db_connection()
-                    qr_token = conn.execute(
-                        "SELECT qr_token FROM clases WHERE id = ?",
-                        (clase[0],)
-                    ).fetchone()[0]
+                    c = conn.cursor()
+                    c.execute("SELECT qr_token FROM clases WHERE id = %s", (clase[0],))
+                    qr_token = c.fetchone()[0]
                     conn.close()
                     
                     url = generar_url_qr(clase[0], qr_token)
-                    qr_img = generar_qr(url)
-                    img_bytes = img_to_bytes(qr_img)
+                    st.image(img_to_bytes(generar_qr(url)), caption=f"QR para {clase[1]}", width=250)
+                    st.code(url)
                     
-                    st.image(img_bytes, caption=f"QR para {clase[1]}", width=250)
-                    st.code(url, language="text")
-                    
-                    # Estadísticas
                     conn = get_db_connection()
-                    num_alumnos = conn.execute(
-                        "SELECT COUNT(*) FROM alumnos_clases WHERE clase_id = ?",
-                        (clase[0],)
-                    ).fetchone()[0]
-                    num_asistencias = conn.execute(
-                        "SELECT COUNT(*) FROM asistencias WHERE clase_id = ?",
-                        (clase[0],)
-                    ).fetchone()[0]
+                    c = conn.cursor()
+                    c.execute("SELECT COUNT(*) FROM alumnos_clases WHERE clase_id = %s", (clase[0],))
+                    num_alumnos = c.fetchone()[0]
+                    c.execute("SELECT COUNT(*) FROM asistencias WHERE clase_id = %s", (clase[0],))
+                    num_asistencias = c.fetchone()[0]
                     conn.close()
                     
                     st.write(f"Alumnos inscritos: {num_alumnos}")
                     st.write(f"Asistencias registradas: {num_asistencias}")
                 
                 with col2:
-                    # Opciones de gestión
                     with st.form(f"opciones_clase_{clase[0]}"):
                         nueva_activa = not clase[2]
                         if st.form_submit_button("Activar" if nueva_activa else "Desactivar"):
                             conn = get_db_connection()
-                            conn.execute(
-                                "UPDATE clases SET activa = ? WHERE id = ?",
+                            c = conn.cursor()
+                            c.execute(
+                                "UPDATE clases SET activa = %s WHERE id = %s",
                                 (nueva_activa, clase[0])
                             )
                             conn.commit()
@@ -514,32 +496,37 @@ def vista_profesor():
     else:
         st.info("No tienes clases asignadas")
 
+# ==============================================
+# VISTA ALUMNO
+# ==============================================
 def vista_alumno():
     st.title("Panel del Alumno")
     st.write(f"Bienvenido/a {st.session_state.user['nombre']}")
     
-    # Mostrar clases del alumno
     conn = get_db_connection()
-    clases = conn.execute(
+    c = conn.cursor()
+    c.execute(
         """SELECT c.id, c.nombre, u.nombre as profesor 
         FROM alumnos_clases ac 
         JOIN clases c ON ac.clase_id = c.id 
         JOIN usuarios u ON c.profesor_id = u.id 
-        WHERE ac.alumno_id = ?""",
+        WHERE ac.alumno_id = %s""",
         (st.session_state.user['id'],)
-    ).fetchall()
+    )
+    clases = c.fetchall()
     conn.close()
     
     if clases:
         st.subheader("Tus Clases")
         for clase in clases:
             with st.expander(f"{clase[1]} - Profesor: {clase[2]}"):
-                # Mostrar asistencias
                 conn = get_db_connection()
-                asistencias = conn.execute(
-                    "SELECT fecha FROM asistencias WHERE estudiante_id = ? AND clase_id = ? ORDER BY fecha DESC",
+                c = conn.cursor()
+                c.execute(
+                    "SELECT fecha FROM asistencias WHERE estudiante_id = %s AND clase_id = %s ORDER BY fecha DESC",
                     (st.session_state.user['id'], clase[0])
-                ).fetchall()
+                )
+                asistencias = c.fetchall()
                 conn.close()
                 
                 if asistencias:
@@ -551,65 +538,94 @@ def vista_alumno():
     else:
         st.info("No estás inscrito en ninguna clase")
 
-# Página de registro de asistencia
+# ==============================================
+# REGISTRO DE ASISTENCIA
+# ==============================================
 def registrar_asistencia():
     st.title("Registro de Asistencia")
     
-    # Obtener parámetros de la URL
-    params = st.query_params
+    # Obtener parámetros de la URL (compatible con todas versiones)
+    try:
+        params = st.query_params if hasattr(st, 'query_params') else st.experimental_get_query_params()
+    except:
+        params = {}
+    
     clase_id = params.get("clase_id", [None])[0]
     token = params.get("token", [None])[0]
     
-    if clase_id and token:
-        conn = get_db_connection()
-        clase = conn.execute(
-            "SELECT c.id, c.nombre, u.nombre FROM clases c JOIN usuarios u ON c.profesor_id = u.id WHERE c.id = ? AND c.qr_token = ?",
+    if not (clase_id and token):
+        st.error("URL de asistencia inválida")
+        return
+    
+    # Verificar sesión PRIMERO
+    if 'user' not in st.session_state:
+        st.warning("🔒 Debes iniciar sesión como alumno para registrar asistencia")
+        login()
+        return
+    
+    if st.session_state.user['tipo'] != 'alumno':
+        st.error("Solo los alumnos pueden registrar asistencia")
+        return
+    
+    # Verificar token y clase
+    conn = get_db_connection()
+    try:
+        c = conn.cursor()
+        c.execute(
+            """SELECT c.id, c.nombre, u.nombre 
+            FROM clases c 
+            JOIN usuarios u ON c.profesor_id = u.id 
+            WHERE c.id = %s AND c.qr_token = %s AND c.activa = TRUE""",
             (clase_id, token)
-        ).fetchone()
-        conn.close()
+        )
+        clase = c.fetchone()
         
-        if clase:
-            st.success(f"Clase: {clase[1]} con el profesor {clase[2]}")
+        if not clase:
+            st.error("Clase no encontrada o token inválido")
+            return
+        
+        st.success(f"Clase: {clase[1]} - Profesor: {clase[2]}")
+        
+        # Verificar si ya registró asistencia
+        c.execute(
+            "SELECT 1 FROM asistencias WHERE estudiante_id = %s AND clase_id = %s",
+            (st.session_state.user['id'], clase[0])
+        )
+        if c.fetchone():
+            st.warning("Ya registraste tu asistencia para esta clase")
+            return
+        
+        if st.button("Confirmar mi asistencia"):
+            c.execute(
+                "INSERT INTO asistencias (estudiante_id, clase_id) VALUES (%s, %s)",
+                (st.session_state.user['id'], clase[0])
+            )
+            conn.commit()
+            st.success("✅ Asistencia registrada correctamente")
+            time.sleep(2)
+            st.rerun()
             
-            if 'user' in st.session_state and st.session_state.user['tipo'] == 'alumno':
-                # Verificar si ya está registrado
-                conn = get_db_connection()
-                ya_registrado = conn.execute(
-                    "SELECT 1 FROM asistencias WHERE estudiante_id = ? AND clase_id = ?",
-                    (st.session_state.user['id'], clase[0])
-                ).fetchone()
-                
-                if not ya_registrado:
-                    if st.button("Registrar mi asistencia"):
-                        conn.execute(
-                            "INSERT INTO asistencias (estudiante_id, clase_id) VALUES (?, ?)",
-                            (st.session_state.user['id'], clase[0])
-                        )
-                        conn.commit()
-                        st.success("Asistencia registrada exitosamente!")
-                        time.sleep(2)
-                        st.rerun()
-                else:
-                    st.warning("Ya has registrado tu asistencia para esta clase")
-                conn.close()
-            else:
-                st.warning("Debes iniciar sesión como alumno para registrar asistencia")
-        else:
-            st.error("Enlace de asistencia no válido")
-    else:
-        st.error("Faltan parámetros en la URL")
+    finally:
+        conn.close()
 
-# Página principal
+# ==============================================
+# PÁGINA PRINCIPAL
+# ==============================================
 def main():
-    # Verificar si estamos en la página de registro
-    if "clase_id" in st.query_params:
+    # Obtener parámetros de la URL (compatible con todas versiones)
+    try:
+        params = st.query_params if hasattr(st, 'query_params') else st.experimental_get_query_params()
+    except:
+        params = {}
+    
+    if "clase_id" in params:
         registrar_asistencia()
         return
     
     if 'user' not in st.session_state:
         login()
     else:
-        st.sidebar.title(f"Bienvenido, {st.session_state.user['nombre']}")
+        st.sidebar.title(f"Bienvenid@, {st.session_state.user['nombre']}")
         st.sidebar.button("Cerrar Sesión", on_click=logout)
         
         if st.session_state.user['tipo'] == 'admin':
