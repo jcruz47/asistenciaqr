@@ -546,7 +546,7 @@ def vista_alumno():
 def registrar_asistencia():
     st.title("Registro de Asistencia")
 
-    # Obtener parámetros de la URL correctamente
+    # Obtener parámetros de la URL
     try:
         params = st.query_params
     except:
@@ -597,6 +597,17 @@ def registrar_asistencia():
             st.warning("⚠️ Esta clase está actualmente desactivada")
             return
 
+        # Verificar si el alumno está inscrito en esta clase
+        c.execute(
+            "SELECT 1 FROM alumnos_clases WHERE alumno_id = %s AND clase_id = %s",
+            (st.session_state.user['id'], clase[0])
+        )
+        inscrito = c.fetchone()
+
+        if not inscrito:
+            st.error("🚫 No estás inscrito en esta clase. No puedes registrar asistencia.")
+            return
+
         # Verificar si ya registró asistencia
         c.execute(
             "SELECT fecha FROM asistencias WHERE estudiante_id = %s AND clase_id = %s LIMIT 1",
@@ -623,7 +634,6 @@ def registrar_asistencia():
     finally:
         conn.close()
 
-    
 def main():
     # Obtener parámetros de la URL (compatible con todas versiones)
     try:
