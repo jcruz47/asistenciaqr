@@ -522,7 +522,10 @@ def vista_profesor():
 
                 if alumnos_asistencias:
                     for alumno_id, alumno_nombre, total in alumnos_asistencias:
-                        with st.expander(f"👤 {alumno_nombre} - {total} asistencia(s)"):
+                        # Reemplazamos el expander interno por un contenedor diferente
+                        with st.container():
+                            st.markdown(f"#### 👤 {alumno_nombre} - {total} asistencia(s)")
+                            
                             # Mostrar fechas específicas de asistencia
                             conn = get_db_connection()
                             c = conn.cursor()
@@ -561,7 +564,7 @@ def vista_profesor():
                                         params.append(fecha_inicio)
                                     if fecha_fin:
                                         query += " AND fecha <= %s"
-                                        params.append(fecha_fin + timedelta(days=1))  # Para incluir todo el día
+                                        params.append(fecha_fin + timedelta(days=1))
                                     
                                     query += " ORDER BY fecha DESC"
                                     c.execute(query, tuple(params))
