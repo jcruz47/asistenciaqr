@@ -545,56 +545,62 @@ def vista_alumno():
 
 def registrar_asistencia():
     st.title("Registro de Asistencia")
-    
-    # Obtener parámetros de la URL (compatible con todas versiones)
+
+    # Obtener parámetros de la URL
     try:
-        params = st.query_params if hasattr(st, 'query_params') else st.experimental_get_query_params()
+        params = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
     except:
         params = {}
-    
+
+    # 🔍 Mostrar parámetros recibidos
+    st.write("🛠️ DEBUG - Parámetros recibidos:", params)
+
     clase_id = params.get("clase_id", [None])[0]
     token = params.get("token", [None])[0]
-    
-    if not (clase_id and token):
-        st.error("URL de asistencia inválida. Faltan parámetros.")
-        return
-    
-    # Verificar sesión PRIMERO
+
+    st.write("📌 clase_id:", clase_id)
+    st.write("📌 token:", token)
+
+    # Verificar sesión activa y tipo de usuario
     if 'user' not in st.session_state:
         st.warning("🔒 Debes iniciar sesión como alumno para registrar asistencia")
         login()
         return
-    
+
     if st.session_state.user['tipo'] != 'alumno':
         st.error("⛔ Solo los alumnos pueden registrar asistencia")
         return
-    
-    # Verificar token y clase
+
+    # Verificar existencia y validez de la clase
     conn = get_db_connection()
     try:
         c = conn.cursor()
         c.execute(
             """SELECT c.id, c.nombre, u.nombre, c.activa 
-            FROM clases c 
-            JOIN usuarios u ON c.profesor_id = u.id 
-            WHERE c.id = %s AND c.qr_token = %s""",
+               FROM clases c 
+               JOIN usuarios u ON c.profesor_id = u.id 
+               WHERE c.id = %s AND c.qr_token = %s""",
             (clase_id, token)
         )
         clase = c.fetchone()
-        
+
+        # 🔍 Mostrar resultado de la consulta
+        st.write("🔎 Resultado de búsqueda de clase:", clase)
+
         if not clase:
             st.error("""
             ❌ Clase no encontrada. Verifica:
-            1. Que el QR sea el más reciente generado
-            2. Que la clase exista en el sistema
+            - Que estás usando el código QR más reciente
+            - Que la clase no ha sido eliminada
+            - Que el enlace contiene correctamente los parámetros `clase_id` y `token`
             """)
             return
-            
+
         if not clase[3]:  # Si la clase está inactiva
             st.warning("⚠️ Esta clase está actualmente desactivada")
             return
 
-        # Verificar asistencia previa
+        # Verificar si ya registró asistencia
         c.execute(
             "SELECT fecha FROM asistencias WHERE estudiante_id = %s AND clase_id = %s LIMIT 1",
             (st.session_state.user['id'], clase[0])
@@ -603,7 +609,7 @@ def registrar_asistencia():
             st.warning("📌 Ya registraste asistencia para esta clase")
             return
 
-        # Registro de asistencia
+        # Registrar asistencia
         if st.button("✅ Confirmar mi asistencia"):
             c.execute(
                 "INSERT INTO asistencias (estudiante_id, clase_id) VALUES (%s, %s)",
@@ -619,7 +625,7 @@ def registrar_asistencia():
         st.error(f"🐘 Error de base de datos: {e}")
     finally:
         conn.close()
-
+    
 def main():
     # Obtener parámetros de la URL (compatible con todas versiones)
     try:
