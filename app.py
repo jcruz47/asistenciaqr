@@ -554,11 +554,17 @@ def registrar_asistencia():
 
     clase_id_str = params.get("clase_id", [None])[0]
     token = params.get("token", [None])[0]
-
+    if not clase_id_str or not token:
+        st.error("⚠️ URL inválida. Asegúrate de escanear el código QR correcto.")
+        return
+    
     try:
         clase_id = int(clase_id_str)
     except (ValueError, TypeError):
         st.error("⚠️ El ID de la clase es inválido.")
+        return
+    if not token:
+        st.error("⚠️ El token de la clase es inválido.")
         return
 
     # Verificar sesión activa y tipo de usuario
@@ -576,12 +582,10 @@ def registrar_asistencia():
     try:
         c = conn.cursor()
         c.execute(
-            """SELECT c.id, c.nombre, u.nombre, c.activa 
-               FROM clases c 
-               JOIN usuarios u ON c.profesor_id = u.id 
-               WHERE c.id = %s AND c.qr_token = %s""",
-            (clase_id, token)
-        )
+    "SELECT id, nombre, activa FROM clases WHERE id = %s AND qr_token = %s",
+    (clase_id, token)
+)
+
         clase = c.fetchone()
 
         if not clase:
