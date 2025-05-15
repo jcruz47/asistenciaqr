@@ -574,44 +574,49 @@ def registrar_asistencia():
     try:
         c = conn.cursor()
         c.execute(
-            """SELECT c.id, c.nombre, u.nombre 
+            """SELECT c.id, c.nombre, u.nombre, c.activa 
             FROM clases c 
             JOIN usuarios u ON c.profesor_id = u.id 
-            WHERE c.id = %s AND c.qr_token = %s AND c.activa = TRUE""",
+            WHERE c.id = %s AND c.qr_token = %s""",
             (clase_id, token)
         )
         clase = c.fetchone()
         
         if not clase:
             st.error("""
-            ❌ Clase no encontrada o token inválido. Causas posibles:
-            1. El QR escaneado es antiguo (token regenerado)
-            2. La clase fue desactivada
-            3. Error en la URL
+            ❌ Clase no encontrada. Verifica:
+            1. Que el QR sea el más reciente generado
+            2. Que la clase exista en el sistema
             """)
             return
-        
-        st.success(f"✅ Clase: {clase[1]} - Profesor: {clase[2]}")
-        
-        # Verificar si ya registró asistencia
+            
+        if not clase[3]:  # Si la clase está inactiva
+            st.warning("⚠️ Esta clase está actualmente desactivada")
+            return
+
+        # Verificar asistencia previa
         c.execute(
-            "SELECT 1 FROM asistencias WHERE estudiante_id = %s AND clase_id = %s",
+            "SELECT fecha FROM asistencias WHERE estudiante_id = %s AND clase_id = %s LIMIT 1",
             (st.session_state.user['id'], clase[0])
         )
         if c.fetchone():
-            st.warning("⚠️ Ya registraste tu asistencia para esta clase")
+            st.warning("📌 Ya registraste asistencia para esta clase")
             return
-        
-        if st.button("🖊️ Confirmar mi asistencia"):
+
+        # Registro de asistencia
+        if st.button("✅ Confirmar mi asistencia"):
             c.execute(
                 "INSERT INTO asistencias (estudiante_id, clase_id) VALUES (%s, %s)",
                 (st.session_state.user['id'], clase[0])
             )
             conn.commit()
-            st.success("🎉 ¡Asistencia registrada correctamente!")
+            st.balloons()
+            st.success(f"🎉 Asistencia registrada para {clase[1]}")
             time.sleep(2)
             st.rerun()
-            
+
+    except psycopg2.Error as e:
+        st.error(f"🐘 Error de base de datos: {e}")
     finally:
         conn.close()
 
