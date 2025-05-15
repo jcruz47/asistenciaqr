@@ -546,69 +546,72 @@ def vista_alumno():
 def registrar_asistencia():
     st.title("Registro de Asistencia")
 
-    # Obtener parámetros de la URL
+    # Obtener parámetros desde la URL
     try:
         params = st.query_params
     except:
         params = {}
 
-    clase_id_str = params.get("clase_id", [None])[0]
-    token = params.get("token", [None])[0]
+    # Modo seguro para extraer los parámetros
+    clase_id_str = params["clase_id"] if "clase_id" in params else None
+    token = params["token"] if "token" in params else None
+
+    if isinstance(clase_id_str, list):
+        clase_id_str = clase_id_str[0]
+    if isinstance(token, list):
+        token = token[0]
+
+    # Mostrar valores para depuración
+    st.write(f"Debug - clase_id: {clase_id_str}, token: {token}")
+
+    # Validaciones básicas
     if not clase_id_str or not token:
         st.error("⚠️ URL inválida. Asegúrate de escanear el código QR correcto.")
         return
-    
+
     try:
         clase_id = int(clase_id_str)
-    except (ValueError, TypeError):
-        st.error("⚠️ El ID de la clase es inválido.")
-        return
-    if not token:
-        st.error("⚠️ El token de la clase es inválido.")
+    except ValueError:
+        st.error("⚠️ El ID de la clase no es válido.")
         return
 
-    # Verificar sesión activa y tipo de usuario
+    # Verificar sesión activa
     if 'user' not in st.session_state:
-        st.warning("🔒 Debes iniciar sesión como alumno para registrar asistencia")
+        st.warning("🔒 Debes iniciar sesión como alumno para registrar asistencia.")
         login()
         return
 
     if st.session_state.user['tipo'] != 'alumno':
-        st.error("⛔ Solo los alumnos pueden registrar asistencia")
+        st.error("⛔ Solo los alumnos pueden registrar asistencia.")
         return
 
-    # Verificar existencia y validez de la clase
+    # Conexión y validación de clase
     conn = get_db_connection()
     try:
         c = conn.cursor()
         c.execute(
-    "SELECT id, nombre, activa FROM clases WHERE id = %s AND qr_token = %s",
-    (clase_id, token)
-)
-
+            "SELECT id, nombre, activa FROM clases WHERE id = %s AND qr_token = %s",
+            (clase_id, token)
+        )
         clase = c.fetchone()
 
         if not clase:
-            st.error("""
-            ❌ Clase no encontrada. Verifica:
-            - Que estás usando el código QR más reciente
-            - Que la clase no ha sido eliminada
-            - Que el enlace contiene correctamente los parámetros `clase_id` y `token`
-            """)
+            st.error("""❌ Clase no encontrada. Verifica:
+- Que estás usando el código QR más reciente
+- Que la clase no ha sido eliminada
+- Que el enlace contiene correctamente los parámetros `clase_id` y `token`""")
             return
 
-        if not clase[3]:  # Clase inactiva
-            st.warning("⚠️ Esta clase está actualmente desactivada")
+        if not clase[2]:
+            st.warning("⚠️ Esta clase está actualmente desactivada.")
             return
 
-        # Verificar si el alumno está inscrito en esta clase
+        # Verificar inscripción del alumno
         c.execute(
             "SELECT 1 FROM alumnos_clases WHERE alumno_id = %s AND clase_id = %s",
             (st.session_state.user['id'], clase[0])
         )
-        inscrito = c.fetchone()
-
-        if not inscrito:
+        if not c.fetchone():
             st.error("🚫 No estás inscrito en esta clase. No puedes registrar asistencia.")
             return
 
@@ -618,7 +621,7 @@ def registrar_asistencia():
             (st.session_state.user['id'], clase[0])
         )
         if c.fetchone():
-            st.warning("📌 Ya registraste asistencia para esta clase")
+            st.warning("📌 Ya registraste asistencia para esta clase.")
             return
 
         # Registrar asistencia
@@ -629,15 +632,14 @@ def registrar_asistencia():
             )
             conn.commit()
             st.balloons()
-            st.success(f"🎉 Asistencia registrada para {clase[1]}")
+            st.success(f"🎉 Asistencia registrada exitosamente para {clase[1]}")
             time.sleep(2)
             st.rerun()
 
-    except psycopg2.Error as e:
-        st.error(f"🐘 Error de base de datos: {e}")
+    except Exception as e:
+        st.error(f"🐘 Error al registrar asistencia: {e}")
     finally:
         conn.close()
-
 def main():
     # Obtener parámetros de la URL (compatible con todas versiones)
     try:
