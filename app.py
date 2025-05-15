@@ -36,6 +36,7 @@ def init_db():
     c = conn.cursor()
     
     try:
+        # Tabla de usuarios
         c.execute('''CREATE TABLE IF NOT EXISTS usuarios
                     (id SERIAL PRIMARY KEY,
                     username TEXT UNIQUE,
@@ -44,6 +45,7 @@ def init_db():
                     tipo TEXT CHECK(tipo IN ('admin', 'profesor', 'alumno')),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
         
+        # Tabla de clases
         c.execute('''CREATE TABLE IF NOT EXISTS clases
                     (id SERIAL PRIMARY KEY,
                     nombre TEXT UNIQUE,
@@ -52,17 +54,20 @@ def init_db():
                     activa BOOLEAN DEFAULT TRUE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
         
+        # Tabla de asistencias
         c.execute('''CREATE TABLE IF NOT EXISTS asistencias
                     (id SERIAL PRIMARY KEY,
                     estudiante_id INTEGER REFERENCES usuarios(id),
                     clase_id INTEGER REFERENCES clases(id),
                     fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
         
+        # Tabla alumnos_clases
         c.execute('''CREATE TABLE IF NOT EXISTS alumnos_clases
                     (alumno_id INTEGER REFERENCES usuarios(id),
                     clase_id INTEGER REFERENCES clases(id),
                     PRIMARY KEY (alumno_id, clase_id))''')
         
+        # Crear usuario admin si no existe
         c.execute("SELECT 1 FROM usuarios WHERE username='admin'")
         if not c.fetchone():
             c.execute("INSERT INTO usuarios (username, password, nombre, tipo) VALUES (%s, %s, %s, %s)",
@@ -80,10 +85,16 @@ init_db()
 # FUNCIONES AUXILIARES
 # ==============================================
 def generar_qr(url, filename=None):
-    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=10,
+        border=4,
+    )
     qr.add_data(url)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
+    
     if filename:
         img.save(f"qr_codes/{filename}")
     return img
@@ -123,7 +134,7 @@ def login():
                 }
                 st.rerun()
             else:
-                st.sidebar.error("Credenciales incorrectas")
+                st.sidebar.error("Usuario o contraseña incorrectos")
         finally:
             conn.close()
 
@@ -133,7 +144,7 @@ def logout():
     st.rerun()
 
 # ==============================================
-# VISTA ADMINISTRADOR
+# VISTAS
 # ==============================================
 def vista_admin():
     st.title("Panel de Administración")
@@ -182,7 +193,7 @@ def vista_admin():
                         finally:
                             conn.close()
                 else:
-                    st.warning("No hay profesores registrados")
+                    st.warning("No hay profesores registrados. Registra al menos un profesor primero.")
         
         st.subheader("Clases Existentes")
         conn = get_db_connection()
@@ -249,7 +260,7 @@ def vista_admin():
                                 conn.close()
                                 st.rerun()
         else:
-            st.info("No hay clases registradas")
+            st.info("No hay clases registradas aún")
 
     with tab2:
         st.header("Gestión de Profesores")
@@ -435,9 +446,6 @@ def vista_admin():
         else:
             st.info("No hay alumnos registrados")
 
-# ==============================================
-# VISTA PROFESOR
-# ==============================================
 def vista_profesor():
     st.title("Panel del Profesor")
     
@@ -496,9 +504,6 @@ def vista_profesor():
     else:
         st.info("No tienes clases asignadas")
 
-# ==============================================
-# VISTA ALUMNO
-# ==============================================
 def vista_alumno():
     st.title("Panel del Alumno")
     st.write(f"Bienvenido/a {st.session_state.user['nombre']}")
@@ -538,9 +543,6 @@ def vista_alumno():
     else:
         st.info("No estás inscrito en ninguna clase")
 
-# ==============================================
-# REGISTRO DE ASISTENCIA
-# ==============================================
 def registrar_asistencia():
     st.title("Registro de Asistencia")
     
@@ -554,7 +556,7 @@ def registrar_asistencia():
     token = params.get("token", [None])[0]
     
     if not (clase_id and token):
-        st.error("URL de asistencia inválida")
+        st.error("URL de asistencia inválida. Faltan parámetros.")
         return
     
     # Verificar sesión PRIMERO
@@ -564,7 +566,7 @@ def registrar_asistencia():
         return
     
     if st.session_state.user['tipo'] != 'alumno':
-        st.error("Solo los alumnos pueden registrar asistencia")
+        st.error("⛔ Solo los alumnos pueden registrar asistencia")
         return
     
     # Verificar token y clase
@@ -581,10 +583,15 @@ def registrar_asistencia():
         clase = c.fetchone()
         
         if not clase:
-            st.error("Clase no encontrada o token inválido")
+            st.error("""
+            ❌ Clase no encontrada o token inválido. Causas posibles:
+            1. El QR escaneado es antiguo (token regenerado)
+            2. La clase fue desactivada
+            3. Error en la URL
+            """)
             return
         
-        st.success(f"Clase: {clase[1]} - Profesor: {clase[2]}")
+        st.success(f"✅ Clase: {clase[1]} - Profesor: {clase[2]}")
         
         # Verificar si ya registró asistencia
         c.execute(
@@ -592,25 +599,22 @@ def registrar_asistencia():
             (st.session_state.user['id'], clase[0])
         )
         if c.fetchone():
-            st.warning("Ya registraste tu asistencia para esta clase")
+            st.warning("⚠️ Ya registraste tu asistencia para esta clase")
             return
         
-        if st.button("Confirmar mi asistencia"):
+        if st.button("🖊️ Confirmar mi asistencia"):
             c.execute(
                 "INSERT INTO asistencias (estudiante_id, clase_id) VALUES (%s, %s)",
                 (st.session_state.user['id'], clase[0])
             )
             conn.commit()
-            st.success("✅ Asistencia registrada correctamente")
+            st.success("🎉 ¡Asistencia registrada correctamente!")
             time.sleep(2)
             st.rerun()
             
     finally:
         conn.close()
 
-# ==============================================
-# PÁGINA PRINCIPAL
-# ==============================================
 def main():
     # Obtener parámetros de la URL (compatible con todas versiones)
     try:
