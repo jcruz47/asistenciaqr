@@ -501,6 +501,29 @@ def vista_profesor():
                             conn.commit()
                             conn.close()
                             st.rerun()
+        
+                # Mostrar alumnos inscritos y sus asistencias (DENTRO del expander de cada clase)
+                st.subheader(f"Alumnos inscritos en {clase[1]}")
+                
+                conn = get_db_connection()
+                c = conn.cursor()
+                c.execute("""
+                    SELECT u.id, u.nombre, COUNT(a.id) as total_asistencias
+                    FROM alumnos_clases ac
+                    JOIN usuarios u ON ac.alumno_id = u.id
+                    LEFT JOIN asistencias a ON a.estudiante_id = u.id AND a.clase_id = %s
+                    WHERE ac.clase_id = %s
+                    GROUP BY u.id, u.nombre
+                    ORDER BY u.nombre
+                    """, (clase[0], clase[0]))
+                alumnos_asistencias = c.fetchall()
+                conn.close()
+
+                if alumnos_asistencias:
+                    for alumno_id, alumno_nombre, total in alumnos_asistencias:
+                        st.write(f"👤 {alumno_nombre}: {total} asistencia(s)")
+                else:
+                    st.info("No hay alumnos inscritos en esta clase.")
     else:
         st.info("No tienes clases asignadas")
 
@@ -615,13 +638,14 @@ def registrar_asistencia():
             st.error("🚫 No estás inscrito en esta clase. No puedes registrar asistencia.")
             return
 
-        # Verificar si ya registró asistencia
+        # Verificar si ya registró asistencia HOY
+        hoy = time.strftime("%Y-%m-%d")  # Fecha en formato YYYY-MM-DD
         c.execute(
-            "SELECT fecha FROM asistencias WHERE estudiante_id = %s AND clase_id = %s LIMIT 1",
-            (st.session_state.user['id'], clase[0])
+            "SELECT 1 FROM asistencias WHERE estudiante_id = %s AND clase_id = %s AND fecha::date = %s::date",
+            (st.session_state.user['id'], clase[0], hoy)
         )
         if c.fetchone():
-            st.warning("📌 Ya registraste asistencia para esta clase.")
+            st.warning("📌 Ya registraste asistencia para esta clase hoy.")
             return
 
         # Registrar asistencia
@@ -640,6 +664,7 @@ def registrar_asistencia():
         st.error(f"🐘 Error al registrar asistencia: {e}")
     finally:
         conn.close()
+
 def main():
     # Obtener parámetros de la URL (compatible con todas versiones)
     try:
